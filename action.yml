@@ -1,0 +1,64 @@
+name: 'dsh-plugin-doctor'
+description: 'Pre-publish health checks for DeepSeek Harness plugins'
+branding:
+  icon: 'check-circle'
+  color: 'blue'
+
+inputs:
+  path:
+    description: 'Plugin directory to check'
+    required: false
+    default: '.'
+  version:
+    description: 'dsh-plugin-doctor release tag to install'
+    required: false
+    default: 'v1.13.0'
+  full:
+    description: 'Also run build + pack + fresh-profile install smoke (slower)'
+    required: false
+    default: 'false'
+
+outputs:
+  ok:
+    description: 'Whether the plugin passed all checks'
+    value: ${{ steps.run.outputs.ok }}
+
+runs:
+  using: 'composite'
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+
+    - name: Run dsh-plugin-doctor
+      id: run
+      shell: bash
+      env:
+        DSH_DOCTOR_VERSION: ${{ inputs.version }}
+        DSH_DOCTOR_PATH: ${{ inputs.path }}
+        DSH_DOCTOR_FULL: ${{ inputs.full }}
+      run: |
+        VER="${DSH_DOCTOR_VERSION#v}"
+        curl -L --fail -o doctor.tgz \
+          "https://github.com/zoahdev/dsh-plugin-doctor/releases/download/${DSH_DOCTOR_VERSION}/dsh-plugin-doctor-${VER}.tgz"
+        npm install -g ./doctor.tgz
+
+        set +e
+        if [ "$DSH_DOCTOR_FULL" = "true" ]; then
+          out=$(dsh-plugin-doctor "$DSH_DOCTOR_PATH" --full)
+        else
+          out=$(dsh-plugin-doctor "$DSH_DOCTOR_PATH")
+        fi
+        code=$?
+        set -e
+
+        printf '%s\n' "$out" | tee -a "$GITHUB_STEP_SUMMARY"
+        while IFS= read -r line; do
+          case "$line" in
+            *"[FAIL]"*) echo "::error::${line}" ;;
+            *"[WARN]"*) echo "::warning::${line}" ;;
+          esac
+        done <<< "$out"
+
+        if [ "$code" -eq 0 ]; then echo "ok=true" >> "$GITHUB_OUTPUT"; else echo "ok=false" >> "$GITHUB_OUTPUT"; fi
+        exit "$code"
